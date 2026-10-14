@@ -75,17 +75,38 @@ def answer(question, openai_key, db):
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
 
-    rag_chain = (
-        {"context": retriever_from_llm | format_docs, "question": RunnablePassthrough()}
-        | prompt
-        | generate_llm
-        | StrOutputParser()
-    )
+    docs = retriever_from_llm.invoke(question)      # "context" 갈래의 앞부분
+
+    context = format_docs(docs)                     # "context" 갈래의 뒷부분
+
+    rag_chain = prompt | generate_llm | StrOutputParser() #딕셔너리를 뺀 나머지 체인
 
     text = ""
-    for chunk in rag_chain.stream(question):
+    for chunk in rag_chain.stream({"context": context, "question": question}):
         text += chunk
         yield text
+
+    pages = set()
+    for doc in docs:
+        pages.add(doc.metadata.get("page")+1)
+        
+    if "메뉴얼에 없습니다" not in text:
+        page_list = [f"p.{n}" for n in sorted(pages)]
+        text += "\n\n📄 출처: " + ", ".join(page_list)
+        yield text
+
+
+    # rag_chain = (
+    #     {"context": retriever_from_llm | format_docs, "question": RunnablePassthrough()}
+    #     | prompt
+    #     | generate_llm
+    #     | StrOutputParser()
+    # )
+
+    # text = ""
+    # for chunk in rag_chain.stream(question):
+    #     text += chunk
+    #     yield text
 
         # print(text, end="", flush=True)
 
