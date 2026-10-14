@@ -1,0 +1,8 @@
+gradio
+langchain<1.0
+langchain-community
+langchain-openai
+langchain-chroma
+langchain-text-splitters
+langchainhub
+pypdf

@@ -1,0 +1,20 @@
+# 비밀 정보
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# 가상환경
+.venv/
+venv/
+
+# 실행 데이터
+.gradio/
+chroma_db/
+
+# PDF
+*.pdf
+
+# macOS
+.DS_Store
