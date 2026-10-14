@@ -6,3 +6,4 @@ langchain-chroma
 langchain-text-splitters
 langchainhub
 pypdf
+python-dotenv
