@@ -1,3 +1,5 @@
+import base64
+import json
 import logging
 import os
 import re
@@ -21,6 +23,13 @@ logging.getLogger("pypdf").setLevel(logging.ERROR)  # PDF 경고 메시지 숨�
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 PDF_PATH = "data/manual.pdf"
+AVATAR_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "avatar.png")
+ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+WALKERS = [  # 걷는 캐릭터 순서대로 (앞장서는 캐릭터 먼저). 각 캐릭터는 있는 파일 중 첫 번째를 사용
+    ["walker.webp", "walker.png"],
+    ["walker2.webp"],
+]
+SCENE_JS_PATH = os.path.join(ASSETS_DIR, "scene.js")
 DOC_NAME = "LG 로보킹 청소로봇 (VR6180VMNC) 사용설명서"
 
 # [수정] 청크 튜닝 실험 결과에 맞게 변경
@@ -270,6 +279,25 @@ def suggest_questions(history):
     history = history[:-1] + [{**history[-1], "options": options}]
     return history, history
 
+
+def scene_head():
+    """구름·언덕·걷는 캐릭터 배경 (assets/scene.js). 파일이 없으면 생략"""
+    if not os.path.exists(SCENE_JS_PATH):
+        return ""
+    images = []
+    for candidates in WALKERS:
+        for name in candidates:
+            path = os.path.join(ASSETS_DIR, name)
+            if os.path.exists(path):
+                mime = "image/webp" if name.endswith(".webp") else "image/png"
+                with open(path, "rb") as f:
+                    images.append(f"data:{mime};base64," + base64.b64encode(f.read()).decode())
+                break
+    with open(SCENE_JS_PATH, encoding="utf-8") as f:
+        js = f.read()
+    return f"<script>window.SCENE_IMAGES = {json.dumps(images)};</script><script>{js}</script>"
+
+
 # ===== 4. 화면 구성 =====
 THEME = gr.themes.Soft(primary_hue="teal", secondary_hue="emerald", neutral_hue="slate").set(
     button_primary_background_fill="#3CC8A8",
@@ -279,9 +307,21 @@ THEME = gr.themes.Soft(primary_hue="teal", secondary_hue="emerald", neutral_hue=
 )
 
 CSS = """
-.gradio-container { max-width: 820px !important; margin: 0 auto !important; }
+.gradio-container { max-width: 820px !important; margin: 0 auto !important; padding-bottom: 60px !important; }
 #header { text-align: center; }
 #chat { border: 1px solid #CDEFE6 !important; border-radius: 14px !important; }
+html { background: #FFFFFF !important; }
+body, gradio-app, .gradio-container, .main, .app { background: transparent !important; }  /* 구름이 내용 뒤에 보이도록 */
+button.secondary:disabled { opacity: 1 !important; color: #A0AEC0 !important; }  /* 비활성 버튼도 불투명하게 */
+.gallery-item { background: #FFFFFF !important; }  /* 예시 질문 버튼을 불투명하게: 배경 캐릭터가 비치지 않도록 */
+#scene-sky { position: fixed; top: 0; left: 0; width: 100%; height: 150px; overflow: hidden; pointer-events: none; z-index: -1; }
+.scene-cloud { position: absolute; left: 100%; animation: cloud-drift linear infinite; }
+@keyframes cloud-drift { from { transform: translateX(0); } to { transform: translateX(calc(-100vw - 200px)); } }
+#scene-hills { position: fixed; left: 0; bottom: 0; pointer-events: none; z-index: -1; }  /* 배경: 모든 내용 뒤 */
+.scene-walker { position: fixed; height: 96px; pointer-events: none; z-index: -1; transform-origin: 50% 100%; }
+@media (prefers-reduced-motion: reduce) { .scene-cloud { animation: none; } }
+#chat .avatar-container { width: 52px !important; height: 52px !important; }
+#chat .avatar-container img { border-radius: 50% !important; border: 1px solid #9EE3D2 !important; object-fit: cover !important; }
 #chat .message.user { background: #E6F8F3 !important; border-color: #9EE3D2 !important; }
 #question textarea, #question input { border: 1px solid #9EE3D2 !important; border-radius: 10px !important; background: white !important; }
 """
@@ -302,9 +342,11 @@ with gr.Blocks(title="가전제품 매뉴얼 도우미") as demo:
 
     chatbot = gr.Chatbot(
         elem_id="chat",
-        height=460,
+        height="calc(100vh - 440px)",  # 화면 높이에 맞춰 채팅창 크기 조절 (스크롤 방지)
+        min_height=280,
         show_label=False,
         placeholder="**무엇이든 물어보세요!**<br>사용설명서를 대신 읽고 답해드려요.",
+        avatar_images=(None, AVATAR_PATH),  # (사용자, 챗봇) 프로필 이미지
     )
     with gr.Row():
         question = gr.Textbox(
@@ -340,4 +382,4 @@ with gr.Blocks(title="가전제품 매뉴얼 도우미") as demo:
         )
 
 if __name__ == "__main__":
-    demo.launch(theme=THEME, css=CSS)
+    demo.launch(theme=THEME, css=CSS, head=scene_head())
