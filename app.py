@@ -336,8 +336,15 @@ THEME = gr.themes.Soft(primary_hue="teal", secondary_hue="emerald", neutral_hue=
 )
 
 CSS = """
+@font-face {  /* 온글잎 대롱체 (눈누 웹폰트) */
+    font-family: 'OnglippDaelong';
+    src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/2507-2@1.0/Ownglyph_daelong-Rg.woff2') format('woff2');
+    font-weight: normal;
+    font-display: swap;
+}
 .gradio-container { max-width: 820px !important; margin: 0 auto !important; padding-bottom: 60px !important; }
 #header { text-align: center; }
+#header h1 { font-family: 'OnglippDaelong', sans-serif !important; font-weight: normal !important; font-size: 2.6em !important; }
 #chat { border: 1px solid #CDEFE6 !important; border-radius: 14px !important; }
 html { background: #FFFFFF !important; }
 body, gradio-app, .gradio-container, .main, .app { background: transparent !important; }  /* 구름이 내용 뒤에 보이도록 */
