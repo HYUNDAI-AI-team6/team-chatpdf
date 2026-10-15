@@ -31,9 +31,15 @@ def build_db(pdf_path, openai_key):
         return None, "⚠️ OpenAI API 키를 먼저 입력한 뒤 PDF를 다시 올려주세요."
     if pdf_path is None:
         return None, ""
+    if not os.path.exists(pdf_path):
+        print(f"⚠️ `{PDF_PATH}` 파일이 없습니다. 매뉴얼 PDF를 이 경로에 넣어주세요.")
+        return None, ""
 
-    #예외처리
-    pages = PyPDFLoader(pdf_path).load_and_split()
+    try:
+        pages = PyPDFLoader(pdf_path).load_and_split()
+    except Exception as e:
+        print("매뉴얼 로드 실패:", e)
+        return None, "⚠️ 매뉴얼에서 글자를 읽지 못했습니다. PDF 경로를 확인하시고, PDF가 손상됐거나 스캔본인지 확인하세요."
 
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
