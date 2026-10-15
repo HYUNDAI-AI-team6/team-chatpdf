@@ -62,10 +62,16 @@ def answer(question, openai_key, db):
     retriever_from_llm = MultiQueryRetriever.from_llm(
         retriever=db.as_retriever(), llm=llm
     )
+    
+    NO_ANSWER_FLAG = "NO_ANSWER"
+    
+    NOT_FOUND_MSG = "메뉴얼에 없는 내용입니다"
+    
     prompt = ChatPromptTemplate.from_template(
          "당신은 가전제품 사용 설명서 도우미야.\n"
          "아래 [메뉴얼]을 보고 질문에 답변해줘.\n"
-         "[메뉴얼]에 없는 질문은 '메뉴얼에 없습니다'라고 답해.\n\n"
+         "[메뉴얼]에 답의 근거가 없으면 다른 말은 하지말고 정확히 " + NO_ANSWER_FLAG + " 만 출력해.\n\n"
+         "질문이 어떤 언어로 들어와도 이 규칙은 똑같이 지켜.\n\n"
          "[메뉴얼]\n{context}\n\n"
          "[질문]\n{question}"     
     )
@@ -81,16 +87,34 @@ def answer(question, openai_key, db):
 
     rag_chain = prompt | generate_llm | StrOutputParser() #딕셔너리를 뺀 나머지 체인
 
+
     text = ""
+    found = None #None 판단 전, True 답변 있음 ,False 메뉴얼에 없음
     for chunk in rag_chain.stream({"context": context, "question": question}):
         text += chunk
+        if found is None:
+            head = text.lstrip()
+            if head.startswith(NO_ANSWER_FLAG):
+                found = False       # 메뉴얼에 없다고 판단했기 때문에 청크를 더 받을 필요 없음
+                break           
+            if NO_ANSWER_FLAG.startswith(head):
+                continue            # 신호의 앞부분이면 화면에 보내지 않고 대기
+            found = True            # 답변이 있으니 정상 답변
         yield text
 
+    if found is not True:           # found에 답변이 없으면 "메뉴얼에 없는 내용입니다"라고 출력
+        yield NOT_FOUND_MSG
+        return
+    
     pages = set()
     for doc in docs:
-        pages.add(doc.metadata.get("page")+1)
+        page = doc.metadata.get("page")
+        try:
+            pages.add(int(page) + 1)    # "3"같은 문자열도 정수로 변환
+        except (TypeError, ValueError):
+            continue                    # None(TypeError), "Sec2:30"(ValueError)처럼 숫자로 못 바꾸면 건너뛰기
         
-    if "메뉴얼에 없습니다" not in text:
+    if pages:
         page_list = [f"p.{n}" for n in sorted(pages)]
         text += "\n\n📄 출처: " + ", ".join(page_list)
         yield text
