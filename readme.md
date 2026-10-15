@@ -1,12 +1,3 @@
----
-title: 먼작귀 가전제품 매뉴얼 상담봇
-emoji: 🍀
-colorFrom: green
-colorTo: blue
-sdk: gradio
-app_file: app.py
-pinned: false
----
 
 <div align="center">
 
