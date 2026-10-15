@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import tempfile
 import uuid
 from datetime import datetime
@@ -123,7 +124,7 @@ def ask(question, history):
     if not question or not question.strip():
         raise gr.Error("질문을 입력하세요.")
 
-    history = history + [
+    history = strip_options(history) + [
         {"role": "user", "content": question},
         {"role": "assistant", "content": "..."},
     ]
@@ -164,6 +165,64 @@ def export_chat(history):
         f.write("\n".join(lines))
     return gr.DownloadButton(value=path, interactive=True)
 
+
+
+# ===== 추천 질문 생성 =====
+N_SUGGEST = 3
+
+SUGGEST_PROMPT = ChatPromptTemplate.from_template(
+    "너는 가전제품 사용설명서 도우미야.\n"
+    "사용자가 방금 한 질문과 답변, 관련 [메뉴얼] 내용을 보고 "
+    "사용자가 이어서 궁금해할 만한 질문 3개를 만들어줘.\n"
+    "- [메뉴얼]에서 답을 찾을 수 있는 질문만 만들 것\n"
+    "- 방금 한 질문과 같은 질문은 제외할 것\n"
+    "- 한국어로, 각 질문은 30자 이내\n"
+    "- 번호나 기호 없이 한 줄에 하나씩\n\n"
+    "[질문]\n{question}\n\n[답변]\n{answer}\n\n[메뉴얼]\n{context}"
+)
+
+
+def strip_options(history):
+    """이전 답변에 붙어 있던 추천 질문 버튼 제거"""
+    return [{"role": m["role"], "content": m["content"]} for m in history]
+
+
+def pick_suggestion(evt: gr.SelectData):
+    """답변 아래 추천 질문을 누르면 그 질문을 입력창에 넣음"""
+    return evt.value
+
+
+def suggest_questions(history):
+    """마지막 질문·답변과 관련 매뉴얼 내용을 보고, 이어서 물어볼 질문을 답변 바로 아래에 붙임"""
+    if DB is None or len(history) < 2:
+        return history, history
+    last_q = history[-2]["content"]
+    last_a = history[-1]["content"]
+
+    try:
+        docs = DB.similarity_search(last_q, k=4)
+        context = "\n\n".join(doc.page_content for doc in docs)
+        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3, openai_api_key=OPENAI_API_KEY)
+        text = (SUGGEST_PROMPT | llm | StrOutputParser()).invoke(
+            {"question": last_q, "answer": last_a, "context": context}
+        )
+    except Exception as e:
+        print("추천 질문 생성 실패:", e)
+        return history, history
+
+    asked = {m["content"] for m in history if m["role"] == "user"}  # 이미 한 질문은 제외
+    questions = []
+    for line in text.splitlines():
+        q = re.sub(r"^\s*(?:[-•*]|\d+[.)])\s*", "", line).strip()
+        if q and q not in asked and q not in questions:
+            questions.append(q)
+    questions = questions[:N_SUGGEST]
+    if not questions:
+        return history, history
+
+    options = [{"value": q, "label": f"💡 {q}"} for q in questions]
+    history = history[:-1] + [{**history[-1], "options": options}]
+    return history, history
 
 # ===== 4. 화면 구성 =====
 THEME = gr.themes.Soft(primary_hue="teal", secondary_hue="emerald", neutral_hue="slate").set(
@@ -216,18 +275,23 @@ with gr.Blocks(title="가전제품 매뉴얼 도우미") as demo:
         download_btn = gr.DownloadButton("💾 대화 저장", size="sm", variant="secondary", interactive=False)
 
     # ===== 5. 이벤트 연결 =====
-    send_btn.click(ask, inputs=[question, history_state], outputs=[chatbot, history_state, question]).then(
-        export_chat, inputs=history_state, outputs=download_btn
-    )
-    question.submit(ask, inputs=[question, history_state], outputs=[chatbot, history_state, question]).then(
-        export_chat, inputs=history_state, outputs=download_btn
-    )
-    clear_btn.click(clear_chat, outputs=[chatbot, history_state, question]).then(
-        export_chat, inputs=history_state, outputs=download_btn
-    )
-    chatbot.clear(clear_chat, outputs=[chatbot, history_state, question]).then(  # 채팅창 휴지통 아이콘
-        export_chat, inputs=history_state, outputs=download_btn
-    )
+    chat_io = dict(fn=ask, inputs=[question, history_state], outputs=[chatbot, history_state, question])
+
+    def after_answer(event):
+        """답변 후: 대화 저장 파일 갱신 → 답변 아래에 추천 질문 붙이기"""
+        (
+            event.success(export_chat, inputs=history_state, outputs=download_btn)
+            .success(suggest_questions, inputs=history_state, outputs=[chatbot, history_state])
+        )
+
+    after_answer(send_btn.click(**chat_io))
+    after_answer(question.submit(**chat_io))
+    after_answer(chatbot.option_select(pick_suggestion, outputs=question).then(**chat_io))  # 추천 질문 클릭
+
+    for clear_event in (clear_btn.click, chatbot.clear):  # 대화 지우기 버튼, 채팅창 휴지통 아이콘
+        clear_event(clear_chat, outputs=[chatbot, history_state, question]).then(
+            export_chat, inputs=history_state, outputs=download_btn
+        )
 
 if __name__ == "__main__":
     demo.launch(theme=THEME, css=CSS)
