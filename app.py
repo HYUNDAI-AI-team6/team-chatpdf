@@ -161,6 +161,23 @@ def answer(question, openai_key, db):
             found = True            # 답변이 있으니 정상 답변
         yield text
 
+    if found is not True:           # found에 답변이 없으면 "해당 내용은 매뉴얼에서 확인할 수 없습니다."라고 출력
+        yield NOT_FOUND_MSG
+        return
+    
+    pages = set()
+    for doc in docs:
+        page = doc.metadata.get("page")
+        try:
+            pages.add(int(page) + 1)    # "3"같은 문자열도 정수로 변환
+        except (TypeError, ValueError):
+            continue                    # None(TypeError), "Sec2:30"(ValueError)처럼 숫자로 못 바꾸면 건너뛰기
+        
+    if pages:
+        page_list = [f"p.{n}" for n in sorted(pages)]
+        text += "\n\n📄 출처: " + ", ".join(page_list)
+        yield text
+
 # ===== 3. 앱 시작 시 매뉴얼 불러오기 =====
 def load_manual(paths=PDF_PATHS):
     if not OPENAI_API_KEY:
