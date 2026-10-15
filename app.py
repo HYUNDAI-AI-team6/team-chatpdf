@@ -12,13 +12,23 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+import glob
 
 load_dotenv()
 logging.getLogger("pypdf").setLevel(logging.ERROR)  # PDF 경고 메시지 숨기기
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-PDF_PATH = "data/manual.pdf"
-DOC_NAME = "LG 로보킹 청소로봇 (VR6180VMNC) 사용설명서"
+
+#data 폴더의 pdf 형식의 파일들을 읽어옵니다.
+PDF_DIR = "data"
+PDF_PATHS = sorted(glob.glob(os.path.join(PDF_DIR, "*.pdf")))
+#PDF_PATH = "data/manual.pdf"
+DOC_NAME = ", ".join(os.path.splitext(os.path.basename(p))[0] for p in PDF_PATHS)
+
+#드랍다운 선택지
+DOCS = {os.path.basename(p): p for p in PDF_PATHS}   # {"manual.pdf": "data/manual.pdf", ...}
+#드랍다운 없이 쓸땐 그냥 요대로
+ALL_DOCS = "전체 (모든 PDF에서 검색)"
 
 # [수정] 청크 튜닝 실험 결과에 맞게 변경
 CHUNK_SIZE = 100
@@ -26,13 +36,16 @@ CHUNK_OVERLAP = 20
 
 
 # ===== 1. PDF 처리 (Load → Split → Embed → Store) =====
-def build_db(pdf_path, openai_key):
+def build_db(pdf_paths, openai_key):
     if not openai_key:
         return None, "⚠️ OpenAI API 키를 먼저 입력한 뒤 PDF를 다시 올려주세요."
-    if pdf_path is None:
+    if pdf_paths is None:
         return None, ""
 
-    pages = PyPDFLoader(pdf_path).load_and_split()
+    #읽어온 pdf 파일들을 등록합니다.
+    pages = []
+    for path in pdf_paths:
+        pages += PyPDFLoader(path).load_and_split()
 
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
@@ -49,7 +62,8 @@ def build_db(pdf_path, openai_key):
     db = Chroma.from_documents(
         texts, embeddings_model, collection_name=f"pdf_{uuid.uuid4().hex}"
     )
-    return db, f"✅ 처리 완료: {len(pages)}페이지 → {len(texts)}개 청크"
+    return db, f"✅ 처리 완료: {len(pages)}페이지"
+    #return db, f"✅ 처리 완료: {len(pages)}페이지 → {len(texts)}개 청크"
 
 # ===== 2. 질문 처리 (Retrieve → Generate) =====
 def answer(question, openai_key, db):
@@ -100,19 +114,28 @@ def answer(question, openai_key, db):
 # print()
 
 # ===== 3. 앱 시작 시 매뉴얼 불러오기 =====
-def load_manual():
+def load_manual(paths=PDF_PATHS):
     if not OPENAI_API_KEY:
         return None, "⚠️ `.env`에 `OPENAI_API_KEY`가 없습니다."
-    if not os.path.exists(PDF_PATH):
-        return None, f"⚠️ `{PDF_PATH}` 파일이 없습니다. 매뉴얼 PDF를 이 경로에 넣어주세요."
+    if not paths:
+        return None, f"⚠️ `{PDF_DIR}` 폴더에 PDF 파일이 없습니다."
     try:
-        return build_db(PDF_PATH, OPENAI_API_KEY)
+        return build_db(paths, OPENAI_API_KEY)
     except Exception as e:
         print("매뉴얼 로드 실패:", e)
         return None, "⚠️ 매뉴얼에서 글자를 읽지 못했습니다. PDF가 손상됐거나 스캔본인지 확인하세요."
 
 
 DB, LOAD_STATUS = load_manual()
+
+
+#새롭게 불러올 때
+def select_doc(doc_name):
+    global DB, LOAD_STATUS, DOC_NAME
+    paths = PDF_PATHS if doc_name == ALL_DOCS else [DOCS[doc_name]]
+    DB, LOAD_STATUS = load_manual(paths)
+    DOC_NAME = doc_name
+    return f"# 💬 가전제품 매뉴얼 상담봇\n📘 {DOC_NAME} · {LOAD_STATUS}", [], []
 
 
 def ask(question, history):
