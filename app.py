@@ -221,7 +221,9 @@ def ask(question, history):
     if DB is None:
         raise gr.Error("매뉴얼을 불러오지 못했습니다. 화면 위쪽 안내를 확인하세요.")
     if not question or not question.strip():
-        raise gr.Error("질문을 입력하세요.")
+        # 빈 질문은 오류 없이 무시 (한글 입력 중 Enter가 두 번 눌리는 경우 등)
+        yield gr.skip(), gr.skip(), gr.skip()
+        return
 
     history = strip_options(history) + [
         {"role": "user", "content": question},
@@ -295,6 +297,8 @@ def suggest_questions(history):
     """마지막 질문·답변과 관련 매뉴얼 내용을 보고, 이어서 물어볼 질문을 답변 바로 아래에 붙임"""
     if DB is None or len(history) < 2:
         return history, history
+    if history[-1].get("options"):  # 이미 추천이 붙어 있으면 다시 만들지 않음 (빈 질문이 무시된 경우)
+        return gr.skip(), gr.skip()
     last_q = history[-2]["content"]
     last_a = history[-1]["content"]
 
