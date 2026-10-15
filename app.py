@@ -207,26 +207,58 @@ def on_upload(files):
 
 
 def ask(question, history):
+    # 1. 매뉴얼 로드 확인
     if DB is None:
-        raise gr.Error("매뉴얼을 불러오지 못했습니다. 화면 위쪽 안내를 확인하세요.")
+        raise gr.Error("매뉴얼을 불러오지 못했습니다.")
+
+    # 2. 질문 입력 확인
     if not question or not question.strip():
         # 빈 질문은 오류 없이 무시 (한글 입력 중 Enter가 두 번 눌리는 경우 등)
         yield gr.skip(), gr.skip(), gr.skip()
         return
 
-    history = strip_options(history) + [
-        {"role": "user", "content": question},
-        {"role": "assistant", "content": "..."},
-    ]
-    yield history, history, ""
+    question = question.strip()
 
-    # [수정] answer()의 매개변수가 바뀌면 여기 호출도 같은 순서로 변경
-    result = answer(question, OPENAI_API_KEY, DB)
-    if isinstance(result, str):  # answer()가 문자열을 반환하는 경우
-        result = [result]
-    for text in result:          # 문자열 또는 yield 스트리밍 모두 처리
-        history[-1] = {"role": "assistant", "content": text}
-        yield history, history, ""
+    # 3. 기존 대화 기록 유지
+    history = strip_options(history or [])
+
+    # 4. 새로운 사용자 질문 추가
+    history.append({
+        "role": "user",
+        "content": question
+    })
+
+    # 5. AI 답변 자리 만들기
+    history.append({
+        "role": "assistant",
+        "content": "답변 생성 중..."
+    })
+
+    # 6. 채팅 화면 갱신
+    yield history.copy(), history.copy(), ""
+
+    try:
+        # 7. AI 답변 생성
+        for text in answer(question, OPENAI_API_KEY, DB):
+
+            # 마지막 AI 메시지만 갱신
+            history[-1] = {
+                "role": "assistant",
+                "content": text
+            }
+
+            # 기존 대화 기록과 함께 화면 업데이트
+            yield history.copy(), history.copy(), ""
+
+    except Exception as e:
+        # 8. 오류 발생 시 안내
+        history[-1] = {
+            "role": "assistant",
+            "content": "답변 생성 중 오류가 발생했습니다."
+        }
+
+        print(f"채팅 오류: {e}", flush=True)
+        yield history.copy(), history.copy(), ""
 
 
 def clear_chat():
