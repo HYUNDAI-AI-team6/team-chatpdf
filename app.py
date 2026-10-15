@@ -1,6 +1,8 @@
 import logging
 import os
+import tempfile
 import uuid
+from datetime import datetime
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -140,6 +142,29 @@ def clear_chat():
     return [], [], ""
 
 
+def export_chat(history):
+    """대화 기록을 txt 파일로 만들어 다운로드 버튼에 연결"""
+    if not history:
+        return gr.DownloadButton(value=None, interactive=False)
+
+    now = datetime.now()
+    lines = [
+        "가전제품 매뉴얼 상담 기록",
+        f"문서: {DOC_NAME}",
+        f"저장 시각: {now:%Y-%m-%d %H:%M}",
+        "=" * 40,
+        "",
+    ]
+    for msg in history:
+        speaker = "질문" if msg["role"] == "user" else "답변"
+        lines += [f"[{speaker}]", msg["content"], ""]
+
+    path = os.path.join(tempfile.gettempdir(), f"매뉴얼상담_{now:%Y%m%d_%H%M%S}.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    return gr.DownloadButton(value=path, interactive=True)
+
+
 # ===== 4. 화면 구성 =====
 THEME = gr.themes.Soft(primary_hue="teal", secondary_hue="emerald", neutral_hue="slate").set(
     button_primary_background_fill="#3CC8A8",
@@ -186,13 +211,23 @@ with gr.Blocks(title="가전제품 매뉴얼 도우미") as demo:
         )
         send_btn = gr.Button("보내기", variant="primary", scale=1, min_width=90)
     gr.Examples(examples=EXAMPLE_QUESTIONS, inputs=question, label="자주 묻는 질문")
-    clear_btn = gr.Button("🗑️ 대화 지우기", size="sm", variant="secondary")
+    with gr.Row():
+        clear_btn = gr.Button("🗑️ 대화 지우기", size="sm", variant="secondary")
+        download_btn = gr.DownloadButton("💾 대화 저장", size="sm", variant="secondary", interactive=False)
 
     # ===== 5. 이벤트 연결 =====
-    send_btn.click(ask, inputs=[question, history_state], outputs=[chatbot, history_state, question])
-    question.submit(ask, inputs=[question, history_state], outputs=[chatbot, history_state, question])
-    clear_btn.click(clear_chat, outputs=[chatbot, history_state, question])
-    chatbot.clear(clear_chat, outputs=[chatbot, history_state, question])  # 채팅창 휴지통 아이콘
+    send_btn.click(ask, inputs=[question, history_state], outputs=[chatbot, history_state, question]).then(
+        export_chat, inputs=history_state, outputs=download_btn
+    )
+    question.submit(ask, inputs=[question, history_state], outputs=[chatbot, history_state, question]).then(
+        export_chat, inputs=history_state, outputs=download_btn
+    )
+    clear_btn.click(clear_chat, outputs=[chatbot, history_state, question]).then(
+        export_chat, inputs=history_state, outputs=download_btn
+    )
+    chatbot.clear(clear_chat, outputs=[chatbot, history_state, question]).then(  # 채팅창 휴지통 아이콘
+        export_chat, inputs=history_state, outputs=download_btn
+    )
 
 if __name__ == "__main__":
     demo.launch(theme=THEME, css=CSS)
