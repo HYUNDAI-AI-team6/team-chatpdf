@@ -41,8 +41,8 @@ WALKERS = [  # 걷는 캐릭터 순서대로 (앞장서는 캐릭터 먼저). �
 SCENE_JS_PATH = os.path.join(ASSETS_DIR, "scene.js")
 
 # [수정] 청크 튜닝 실험 결과에 맞게 변경
-CHUNK_SIZE = 100
-CHUNK_OVERLAP = 20
+CHUNK_SIZE = 1000
+CHUNK_OVERLAP = 40
 
 # ===== 1. PDF 처리 (Load → Split → Embed → Store) =====
 def build_db(pdf_paths, openai_key):
