@@ -34,8 +34,15 @@ def build_db(pdf_path, openai_key):
         return None, "⚠️ OpenAI API 키를 먼저 입력한 뒤 PDF를 다시 올려주세요."
     if pdf_path is None:
         return None, ""
+    if not os.path.exists(pdf_path):
+        print(f"⚠️ `{PDF_PATH}` 파일이 없습니다. 매뉴얼 PDF를 이 경로에 넣어주세요.")
+        return None, ""
 
-    pages = PyPDFLoader(pdf_path).load_and_split()
+    try:
+        pages = PyPDFLoader(pdf_path).load_and_split()
+    except Exception as e:
+        print("매뉴얼 로드 실패:", e)
+        return None, "⚠️ 매뉴얼에서 글자를 읽지 못했습니다. PDF 경로를 확인하시고, PDF가 손상됐거나 스캔본인지 확인하세요."
 
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
@@ -61,9 +68,11 @@ def answer(question, openai_key, db):
     if not question:
         raise gr.Error("질문을 입력하세요.")
 
+    mmr_retriever = db.as_retriever(search_type="mmr", search_kwargs={"k": 3})
+
     llm = ChatOpenAI(temperature=0, openai_api_key=openai_key)
     retriever_from_llm = MultiQueryRetriever.from_llm(
-        retriever=db.as_retriever(), llm=llm
+        retriever=mmr_retriever, llm=llm
     )
     prompt = ChatPromptTemplate.from_template(
          """
@@ -126,15 +135,18 @@ def answer(question, openai_key, db):
 
         # print(text, end="", flush=True)
 
-
-db,_ = build_db("./pdf/제품사용설명서.pdf", OPENAI_API_KEY)
-# build_db_text= build_db("./pdf/제품사용설명서.pdf", OPENAI_API_KEY)
-# print(build_db_text)
-prev = ""
-for text in answer("키보드 청소하는 법", OPENAI_API_KEY, db):
-    print(text[len(prev):], end="", flush=True)   # 새로 추가된 부분만 출력
-    prev = text
-print()
+# PDF_PATH = "./data/manual.pdf"
+# if not os.path.exists(PDF_PATH):
+#     print(f"⚠️ `{PDF_PATH}` 파일이 없습니다. 매뉴얼 PDF를 이 경로에 넣어주세요.")
+# else:
+#     db,_ = build_db(PDF_PATH, OPENAI_API_KEY)
+#     # build_db_text= build_db("./pdf/제품사용설명서.pdf", OPENAI_API_KEY)
+#     # print(build_db_text)
+#     prev = ""
+#     for text in answer("예약 청소는 최대 몇 시간 뒤까지 설정할 수 있나요?", OPENAI_API_KEY, db):
+#         print(text[len(prev):], end="", flush=True)   # 새로 추가된 부분만 출력
+#         prev = text
+#     print()
 
 # ===== 3. 앱 시작 시 매뉴얼 불러오기 =====
 def load_manual():
