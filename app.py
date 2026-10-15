@@ -2,10 +2,7 @@ import base64
 import json
 import logging
 import os
-import re
-import tempfile
 import uuid
-from datetime import datetime
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -17,12 +14,24 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+import glob
 
 load_dotenv()
 logging.getLogger("pypdf").setLevel(logging.ERROR)  # PDF 경고 메시지 숨기기
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-PDF_PATH = "data/manual.pdf"
+
+#data 폴더의 pdf 형식의 파일들을 읽어옵니다.
+PDF_DIR = "data"
+PDF_PATHS = sorted(glob.glob(os.path.join(PDF_DIR, "*.pdf")))
+
+DOC_NAME = ", ".join(os.path.splitext(os.path.basename(p))[0] for p in PDF_PATHS)
+
+#드랍다운 선택지
+DOCS = {os.path.basename(p): p for p in PDF_PATHS}   # {"manual.pdf": "data/manual.pdf", ...}
+#드랍다운 없이 쓸땐 그냥 요대로
+ALL_DOCS = "전체 (모든 PDF에서 검색)"
+
 AVATAR_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "avatar.png")
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 WALKERS = [  # 걷는 캐릭터 순서대로 (앞장서는 캐릭터 먼저). 각 캐릭터는 있는 파일 중 첫 번째를 사용
@@ -30,28 +39,22 @@ WALKERS = [  # 걷는 캐릭터 순서대로 (앞장서는 캐릭터 먼저). �
     ["walker2.webp"],
 ]
 SCENE_JS_PATH = os.path.join(ASSETS_DIR, "scene.js")
-DOC_NAME = "LG 로보킹 청소로봇 (VR6180VMNC) 사용설명서"
 
 # [수정] 청크 튜닝 실험 결과에 맞게 변경
 CHUNK_SIZE = 100
 CHUNK_OVERLAP = 20
 
-
 # ===== 1. PDF 처리 (Load → Split → Embed → Store) =====
-def build_db(pdf_path, openai_key):
+def build_db(pdf_paths, openai_key):
     if not openai_key:
         return None, "⚠️ OpenAI API 키를 먼저 입력한 뒤 PDF를 다시 올려주세요."
-    if pdf_path is None:
-        return None, ""
-    if not os.path.exists(pdf_path):
-        print(f"⚠️ `{PDF_PATH}` 파일이 없습니다. 매뉴얼 PDF를 이 경로에 넣어주세요.")
+    if pdf_paths is None:
         return None, ""
 
-    try:
-        pages = PyPDFLoader(pdf_path).load_and_split()
-    except Exception as e:
-        print("매뉴얼 로드 실패:", e)
-        return None, "⚠️ 매뉴얼에서 글자를 읽지 못했습니다. PDF 경로를 확인하시고, PDF가 손상됐거나 스캔본인지 확인하세요."
+    #읽어온 pdf 파일들을 등록합니다.
+    pages = []
+    for path in pdf_paths:
+        pages += PyPDFLoader(path).load_and_split()
 
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
@@ -68,7 +71,8 @@ def build_db(pdf_path, openai_key):
     db = Chroma.from_documents(
         texts, embeddings_model, collection_name=f"pdf_{uuid.uuid4().hex}"
     )
-    return db, f"✅ 처리 완료: {len(pages)}페이지 → {len(texts)}개 청크"
+    return db, f"✅ 처리 완료: {len(pages)}페이지"
+    #return db, f"✅ 처리 완료: {len(pages)}페이지 → {len(texts)}개 청크"
 
 # ===== 2. 질문 처리 (Retrieve → Generate) =====
 def answer(question, openai_key, db):
@@ -77,11 +81,9 @@ def answer(question, openai_key, db):
     if not question:
         raise gr.Error("질문을 입력하세요.")
 
-    mmr_retriever = db.as_retriever(search_type="mmr", search_kwargs={"k": 3})
-
     llm = ChatOpenAI(temperature=0, openai_api_key=openai_key)
     retriever_from_llm = MultiQueryRetriever.from_llm(
-        retriever=mmr_retriever, llm=llm
+        retriever=db.as_retriever(), llm=llm
     )
     
     NO_ANSWER_FLAG = "NO_ANSWER"
@@ -156,65 +158,44 @@ def answer(question, openai_key, db):
             found = True            # 답변이 있으니 정상 답변
         yield text
 
-    if found is not True:           # found에 답변이 없으면 "해당 내용은 매뉴얼에서 확인할 수 없습니다."라고 출력
-        yield NOT_FOUND_MSG
-        return
-    
-    pages = set()
-    for doc in docs:
-        page = doc.metadata.get("page")
-        try:
-            pages.add(int(page) + 1)    # "3"같은 문자열도 정수로 변환
-        except (TypeError, ValueError):
-            continue                    # None(TypeError), "Sec2:30"(ValueError)처럼 숫자로 못 바꾸면 건너뛰기
-        
-    if pages:
-        page_list = [f"p.{n}" for n in sorted(pages)]
-        text += "\n\n📄 출처: " + ", ".join(page_list)
-        yield text
-
-
-    # rag_chain = (
-    #     {"context": retriever_from_llm | format_docs, "question": RunnablePassthrough()}
-    #     | prompt
-    #     | generate_llm
-    #     | StrOutputParser()
-    # )
-
-    # text = ""
-    # for chunk in rag_chain.stream(question):
-    #     text += chunk
-    #     yield text
-
-        # print(text, end="", flush=True)
-
-# PDF_PATH = "./data/manual.pdf"
-# if not os.path.exists(PDF_PATH):
-#     print(f"⚠️ `{PDF_PATH}` 파일이 없습니다. 매뉴얼 PDF를 이 경로에 넣어주세요.")
-# else:
-#     db,_ = build_db(PDF_PATH, OPENAI_API_KEY)
-#     # build_db_text= build_db("./pdf/제품사용설명서.pdf", OPENAI_API_KEY)
-#     # print(build_db_text)
-#     prev = ""
-#     for text in answer("예약 청소는 최대 몇 시간 뒤까지 설정할 수 있나요?", OPENAI_API_KEY, db):
-#         print(text[len(prev):], end="", flush=True)   # 새로 추가된 부분만 출력
-#         prev = text
-#     print()
-
 # ===== 3. 앱 시작 시 매뉴얼 불러오기 =====
-def load_manual():
+def load_manual(paths=PDF_PATHS):
     if not OPENAI_API_KEY:
         return None, "⚠️ `.env`에 `OPENAI_API_KEY`가 없습니다."
-    if not os.path.exists(PDF_PATH):
-        return None, f"⚠️ `{PDF_PATH}` 파일이 없습니다. 매뉴얼 PDF를 이 경로에 넣어주세요."
+    if not paths:
+        return None, f"⚠️ `{PDF_DIR}` 폴더에 PDF 파일이 없습니다."
     try:
-        return build_db(PDF_PATH, OPENAI_API_KEY)
+        return build_db(paths, OPENAI_API_KEY)
     except Exception as e:
         print("매뉴얼 로드 실패:", e)
         return None, "⚠️ 매뉴얼에서 글자를 읽지 못했습니다. PDF가 손상됐거나 스캔본인지 확인하세요."
 
 
-DB, LOAD_STATUS = load_manual()
+#DB, LOAD_STATUS = load_manual()
+DB, LOAD_STATUS = None, "PDF를 업로드해 주세요."
+
+#새로운 마크다운 불러올 때
+def select_doc(doc_name):
+    global DB, LOAD_STATUS, DOC_NAME
+    paths = PDF_PATHS if doc_name == ALL_DOCS else [DOCS[doc_name]]
+    DB, LOAD_STATUS = load_manual(paths)
+    DOC_NAME = doc_name
+    return f"# 💬 가전제품 매뉴얼 상담봇\n📘 {DOC_NAME} · {LOAD_STATUS}", [], []
+
+#파일올리는 부분.
+def on_upload(files):
+    global DB, LOAD_STATUS, DOC_NAME
+    paths = [f if isinstance(f, str) else f.name for f in (files or [])]
+    if not paths:
+        DB, LOAD_STATUS, DOC_NAME = None, "PDF를 업로드해 주세요.", ""
+    else:
+        try:
+            DB, LOAD_STATUS = build_db(paths, OPENAI_API_KEY)
+        except Exception as e:
+            print("매뉴얼 로드 실패:", e)
+            DB, LOAD_STATUS = None, "⚠️ 매뉴얼에서 글자를 읽지 못했습니다. PDF가 손상됐거나 스캔본인지 확인하세요."
+        DOC_NAME = ", ".join(os.path.splitext(os.path.basename(p))[0] for p in paths)
+    return f"# 💬 가전제품 매뉴얼 상담봇\n📘 {DOC_NAME} · {LOAD_STATUS}", [], []
 
 
 def ask(question, history):
@@ -225,7 +206,7 @@ def ask(question, history):
         yield gr.skip(), gr.skip(), gr.skip()
         return
 
-    history = strip_options(history) + [
+    history = history + [
         {"role": "user", "content": question},
         {"role": "assistant", "content": "..."},
     ]
@@ -382,11 +363,14 @@ EXAMPLE_QUESTIONS = [
 ]
 
 with gr.Blocks(title="가전제품 매뉴얼 도우미") as demo:
-    gr.Markdown(
+    header = gr.Markdown(
         f"# 💬 가전제품 매뉴얼 상담봇\n📘 {DOC_NAME} · {LOAD_STATUS}",
         elem_id="header",
     )
     history_state = gr.State([])
+
+    # pdf 여러개 등록하기.
+    files = gr.File(file_count="multiple", file_types=[".pdf"], label="PDF 업로드")
 
     chatbot = gr.Chatbot(
         elem_id="chat",
@@ -396,6 +380,9 @@ with gr.Blocks(title="가전제품 매뉴얼 도우미") as demo:
         placeholder="**무엇이든 물어보세요!**<br>사용설명서를 대신 읽고 답해드려요.",
         avatar_images=(None, AVATAR_PATH),  # (사용자, 챗봇) 프로필 이미지
     )
+
+    #파일 정보 챗봇에 입력.
+    files.upload(on_upload, inputs=files, outputs=[header, chatbot, history_state])
     with gr.Row():
         question = gr.Textbox(
             elem_id="question",
@@ -406,28 +393,13 @@ with gr.Blocks(title="가전제품 매뉴얼 도우미") as demo:
         )
         send_btn = gr.Button("보내기", variant="primary", scale=1, min_width=90)
     gr.Examples(examples=EXAMPLE_QUESTIONS, inputs=question, label="자주 묻는 질문")
-    with gr.Row():
-        clear_btn = gr.Button("🗑️ 대화 지우기", size="sm", variant="secondary")
-        download_btn = gr.DownloadButton("💾 대화 저장", size="sm", variant="secondary", interactive=False)
+    clear_btn = gr.Button("🗑️ 대화 지우기", size="sm", variant="secondary")
 
     # ===== 5. 이벤트 연결 =====
-    chat_io = dict(fn=ask, inputs=[question, history_state], outputs=[chatbot, history_state, question])
-
-    def after_answer(event):
-        """답변 후: 대화 저장 파일 갱신 → 답변 아래에 추천 질문 붙이기"""
-        (
-            event.success(export_chat, inputs=history_state, outputs=download_btn)
-            .success(suggest_questions, inputs=history_state, outputs=[chatbot, history_state])
-        )
-
-    after_answer(send_btn.click(**chat_io))
-    after_answer(question.submit(**chat_io))
-    after_answer(chatbot.option_select(pick_suggestion, outputs=question).then(**chat_io))  # 추천 질문 클릭
-
-    for clear_event in (clear_btn.click, chatbot.clear):  # 대화 지우기 버튼, 채팅창 휴지통 아이콘
-        clear_event(clear_chat, outputs=[chatbot, history_state, question]).then(
-            export_chat, inputs=history_state, outputs=download_btn
-        )
+    send_btn.click(ask, inputs=[question, history_state], outputs=[chatbot, history_state, question])
+    question.submit(ask, inputs=[question, history_state], outputs=[chatbot, history_state, question])
+    clear_btn.click(clear_chat, outputs=[chatbot, history_state, question])
+    chatbot.clear(clear_chat, outputs=[chatbot, history_state, question])  # 채팅창 휴지통 아이콘
 
 if __name__ == "__main__":
     demo.launch(theme=THEME, css=CSS, head=scene_head())
