@@ -1,10 +1,11 @@
 import base64
+import glob
 import json
 import logging
 import os
-import uuid
 import re
 import tempfile
+import uuid
 from datetime import datetime
 
 import gradio as gr
@@ -17,7 +18,6 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-import glob
 
 load_dotenv()
 logging.getLogger("pypdf").setLevel(logging.ERROR)  # PDF 경고 메시지 숨기기
@@ -185,6 +185,11 @@ def select_doc(doc_name):
     DOC_NAME = doc_name
     return f"# 💬 가전제품 매뉴얼 상담봇\n📘 {DOC_NAME} · {LOAD_STATUS}", [], []
 
+def doc_card():
+    """오른쪽 '불러온 문서' 카드 내용"""
+    return f"#### 📘 불러온 문서\n**{DOC_NAME or '아직 없음'}**\n\n{LOAD_STATUS}"
+
+
 #파일올리는 부분.
 def on_upload(files):
     global DB, LOAD_STATUS, DOC_NAME
@@ -198,7 +203,7 @@ def on_upload(files):
             print("매뉴얼 로드 실패:", e)
             DB, LOAD_STATUS = None, "⚠️ 매뉴얼에서 글자를 읽지 못했습니다. PDF가 손상됐거나 스캔본인지 확인하세요."
         DOC_NAME = ", ".join(os.path.splitext(os.path.basename(p))[0] for p in paths)
-    return f"# 💬 가전제품 매뉴얼 상담봇\n📘 {DOC_NAME} · {LOAD_STATUS}", [], []
+    return doc_card(), [], []
 
 
 def ask(question, history):
@@ -209,7 +214,7 @@ def ask(question, history):
         yield gr.skip(), gr.skip(), gr.skip()
         return
 
-    history = history + [
+    history = strip_options(history) + [
         {"role": "user", "content": question},
         {"role": "assistant", "content": "..."},
     ]
@@ -345,9 +350,18 @@ CSS = """
     font-weight: normal;
     font-display: swap;
 }
-.gradio-container { max-width: 820px !important; margin: 0 auto !important; padding-bottom: 60px !important; }
+.gradio-container { max-width: 1120px !important; margin: 0 auto !important; padding-bottom: 60px !important; }
 #header { text-align: center; }
 #header h1 { font-family: 'OnglippDaelong', sans-serif !important; font-weight: normal !important; font-size: 2.6em !important; }
+#side { gap: 12px; }
+#doc-card { background: #FFFFFF; border: 1px solid #CDEFE6; border-radius: 14px; padding: 14px 16px; }
+#upload-box { border: 1px dashed #9EE3D2 !important; border-radius: 14px !important; background: #FFFFFF !important; }
+#upload-box [data-testid="upload-text"] { font-size: 0.85rem !important; line-height: 1.5 !important; }  /* 업로드 안내 글씨 작게 */
+#upload-box .icon-wrap { width: 20px !important; height: 18px !important; margin-bottom: 4px !important; }  /* 업로드 아이콘 작게 */
+#upload-box .icon-wrap svg { width: 100% !important; height: 100% !important; }
+#upload-box .or { font-size: 0 !important; }  /* '- 또는 -' 대신 '또는' */
+#upload-hint, #upload-hint p { color: #A0AEC0 !important; font-size: 0.82rem !important; }  /* 업로드 안내 문구 연하게 */
+#upload-box .or::before { content: "또는"; font-size: 0.78rem; }
 #chat { border: 1px solid #CDEFE6 !important; border-radius: 14px !important; }
 html { background: #FFFFFF !important; }
 body, gradio-app, .gradio-container, .main, .app { background: transparent !important; }  /* 구름이 내용 뒤에 보이도록 */
@@ -373,43 +387,72 @@ EXAMPLE_QUESTIONS = [
 ]
 
 with gr.Blocks(title="가전제품 매뉴얼 도우미") as demo:
-    header = gr.Markdown(
-        f"# 💬 가전제품 매뉴얼 상담봇\n📘 {DOC_NAME} · {LOAD_STATUS}",
+    gr.Markdown(
+        "# 💬 가전제품 매뉴얼 상담봇\n두꺼운 사용설명서, 이제 읽지 말고 물어보세요.",
         elem_id="header",
     )
     history_state = gr.State([])
 
-    # pdf 여러개 등록하기.
-    files = gr.File(file_count="multiple", file_types=[".pdf"], label="PDF 업로드")
+    with gr.Row(equal_height=False):
+        # 왼쪽: 채팅 영역 (기존 화면 그대로)
+        with gr.Column(scale=3, min_width=480):
+            chatbot = gr.Chatbot(
+                elem_id="chat",
+                height="calc(100vh - 450px)",  # 화면 높이에 맞춰 채팅창 크기 조절 (스크롤 방지)
+                min_height=280,
+                show_label=False,
+                placeholder="**무엇이든 물어보세요!**<br>오른쪽에서 사용설명서 PDF를 올리면 대신 읽고 답해드려요.",
+                avatar_images=(None, AVATAR_PATH),  # (사용자, 챗봇) 프로필 이미지
+            )
+            with gr.Row():
+                question = gr.Textbox(
+                    elem_id="question",
+                    placeholder="궁금한 점을 입력하세요 (Enter로 전송)",
+                    show_label=False,
+                    container=False,
+                    scale=5,
+                )
+                send_btn = gr.Button("보내기", variant="primary", scale=1, min_width=90)
+            gr.Examples(examples=EXAMPLE_QUESTIONS, inputs=question, label="자주 묻는 질문")
+            with gr.Row():
+                clear_btn = gr.Button("🗑️ 대화 지우기", size="sm", variant="secondary")
+                download_btn = gr.DownloadButton("💾 대화 저장", size="sm", variant="secondary", interactive=False)
 
-    chatbot = gr.Chatbot(
-        elem_id="chat",
-        height="calc(100vh - 440px)",  # 화면 높이에 맞춰 채팅창 크기 조절 (스크롤 방지)
-        min_height=280,
-        show_label=False,
-        placeholder="**무엇이든 물어보세요!**<br>사용설명서를 대신 읽고 답해드려요.",
-        avatar_images=(None, AVATAR_PATH),  # (사용자, 챗봇) 프로필 이미지
-    )
-
-    #파일 정보 챗봇에 입력.
-    files.upload(on_upload, inputs=files, outputs=[header, chatbot, history_state])
-    with gr.Row():
-        question = gr.Textbox(
-            elem_id="question",
-            placeholder="궁금한 점을 입력하세요 (Enter로 전송)",
-            show_label=False,
-            container=False,
-            scale=5,
-        )
-        send_btn = gr.Button("보내기", variant="primary", scale=1, min_width=90)
-    gr.Examples(examples=EXAMPLE_QUESTIONS, inputs=question, label="자주 묻는 질문")
-    clear_btn = gr.Button("🗑️ 대화 지우기", size="sm", variant="secondary")
+        # 오른쪽: 문서 영역 (PDF 업로드)
+        with gr.Column(scale=1, min_width=260, elem_id="side"):
+            doc_status = gr.Markdown(doc_card(), elem_id="doc-card")
+            files = gr.File(  # pdf 여러개 등록하기
+                file_count="multiple",
+                file_types=[".pdf"],
+                label="📎 PDF 업로드",
+                elem_id="upload-box",
+            )
+            gr.Markdown("여러 개를 한 번에 올릴 수 있어요.<br>새로 올리면 대화가 초기화돼요.", elem_id="upload-hint")
 
     # ===== 5. 이벤트 연결 =====
-    send_btn.click(ask, inputs=[question, history_state], outputs=[chatbot, history_state, question])
-    question.submit(ask, inputs=[question, history_state], outputs=[chatbot, history_state, question])
-    clear_btn.click(clear_chat, outputs=[chatbot, history_state, question])
-    chatbot.clear(clear_chat, outputs=[chatbot, history_state, question])  # 채팅창 휴지통 아이콘
+    chat_io = dict(fn=ask, inputs=[question, history_state], outputs=[chatbot, history_state, question])
+
+    def after_answer(event):
+        """답변 후: 대화 저장 파일 갱신 → 답변 아래에 추천 질문 붙이기"""
+        (
+            event.success(export_chat, inputs=history_state, outputs=download_btn)
+            .success(suggest_questions, inputs=history_state, outputs=[chatbot, history_state])
+        )
+
+    after_answer(send_btn.click(**chat_io))
+    after_answer(question.submit(**chat_io))
+    after_answer(chatbot.option_select(pick_suggestion, outputs=question).then(**chat_io))  # 추천 질문 클릭
+
+    for clear_event in (clear_btn.click, chatbot.clear):  # 대화 지우기 버튼, 채팅창 휴지통 아이콘
+        clear_event(clear_chat, outputs=[chatbot, history_state, question]).then(
+            export_chat, inputs=history_state, outputs=download_btn
+        )
+
+    # 파일을 올리거나 지우면 문서를 다시 불러오고 대화 초기화
+    for file_event in (files.upload, files.clear):
+        file_event(on_upload, inputs=files, outputs=[doc_status, chatbot, history_state]).then(
+            export_chat, inputs=history_state, outputs=download_btn
+        )
 
 if __name__ == "__main__":
     demo.launch(theme=THEME, css=CSS, head=scene_head())
