@@ -3,15 +3,26 @@
 
 CHUNK_CONFIGS와 EXAMPLE_QUESTIONS를 수정하여 실험합니다.
 
+OpenAI API를 호출하므로 임베딩 및 답변 생성 비용이 발생합니다.
+
 결과는 experiments/ 폴더에 CSV 파일로 저장됩니다.
-각 질문의 답변, 검색 통계, 응답 시간 등을 기록하며 청크 원문은 저장하지 않습니다.
+
+CSV 출력 형식:
+- Chunk Size
+- Chunk Overlap
+- 전체 청크 수
+- 인덱스 생성 시간
+- 질문 번호 및 질문
+- 답변 (40자마다 줄바꿈)
+- 검색된 청크 수
 """
 
 import csv
 import os
 import re
 import uuid
-from datetime import datetime
+import textwrap
+
 from pathlib import Path
 from time import perf_counter
 
@@ -37,9 +48,10 @@ OUTPUT_DIR = BASE_DIR / "experiments"
 # (청크 크기, 청크 오버랩)
 # 여러 설정을 추가하여 한 번에 실험할 수 있습니다.
 CHUNK_CONFIGS = [
-    #(100, 20),
-    (300, 20),
-    # (1000, 200),
+    # (100, 20),
+    # (300, 90),
+    # (500, 20),
+     (1000, 300),
 ]
 
 # 평가 질문
@@ -98,7 +110,39 @@ def create_result_file():
             number += 1
 
 
-# ===== 4. RAG 체인 생성 =====
+# ===== 4. 답변 줄바꿈 함수 =====
+
+def format_answer(response, width=40):
+    """
+    답변을 40자마다 줄바꿈합니다.
+    기존 문단 및 번호 목록의 줄바꿈은 유지합니다.
+    """
+
+    lines = []
+
+    for line in response.splitlines():
+
+        # 기존 빈 줄 유지
+        if not line:
+            lines.append("")
+            continue
+
+        # 40자 단위로 줄바꿈
+        wrapped_lines = textwrap.wrap(
+            line,
+            width=width,
+            break_long_words=True,
+            break_on_hyphens=False,
+            replace_whitespace=False,
+            drop_whitespace=False,
+        )
+
+        lines.extend(wrapped_lines)
+
+    return "\n".join(lines)
+
+
+# ===== 5. RAG 체인 생성 =====
 
 def make_answer_chain(db, api_key):
 
@@ -158,7 +202,7 @@ def make_answer_chain(db, api_key):
     return answer
 
 
-# ===== 5. 실험 실행 =====
+# ===== 6. 실험 실행 =====
 
 def main():
 
@@ -200,16 +244,11 @@ def main():
 
     # ===== PDF 로드 =====
 
-    # load_and_split() 대신 load() 사용
     pages = PyPDFLoader(str(PDF_PATH)).load()
 
     embeddings = OpenAIEmbeddings(
         model=EMBEDDING_MODEL,
         api_key=api_key
-    )
-
-    run_id = datetime.now().astimezone().strftime(
-        "%Y%m%d_%H%M%S_%f"
     )
 
     # ===== CSV 생성 =====
@@ -218,24 +257,7 @@ def main():
 
     with output_file as file:
 
-        writer = csv.writer(file)
-
-        # CSV 헤더
-        writer.writerow([
-            "실험 ID",
-            "Chunk Size",
-            "Chunk Overlap",
-            "전체 청크 수",
-            "인덱스 생성 시간(초)",
-            "질문 번호",
-            "질문",
-            "답변",
-            "검색된 청크 수",
-            "검색된 PDF 페이지",
-            "검색 문맥 길이",
-            "응답 시간(초)",
-            "오류",
-        ])
+        writer = csv.writer(file, delimiter=":")
 
         # ===== 청크 설정별 실험 =====
 
@@ -246,7 +268,8 @@ def main():
             print(f"Chunk Overlap : {overlap}")
             print("==============================")
 
-            # 청크 분할
+            # ===== 청크 분할 =====
+
             text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=size,
                 chunk_overlap=overlap,
@@ -262,6 +285,15 @@ def main():
                 )
 
             print(f"전체 청크 수 : {len(chunks)}")
+
+            # ===== CSV 공통 정보 저장 =====
+
+            writer.writerow(["Chunk Size", size])
+            writer.writerow(["Chunk Overlap", overlap])
+            writer.writerow(["전체 청크 수", len(chunks)])
+            writer.writerow([])
+
+            file.flush()
 
             db = None
 
@@ -286,7 +318,18 @@ def main():
                     f"{index_seconds:.2f}초"
                 )
 
-                # RAG 체인 생성
+                # ===== 인덱스 생성 시간 CSV 저장 =====
+
+                writer.writerow([
+                    "인덱스 생성 시간",
+                    f"{index_seconds:.6f}초"
+                ])
+
+                writer.writerow([])
+                file.flush()
+
+                # ===== RAG 체인 생성 =====
+
                 answer = make_answer_chain(db, api_key)
 
                 response_times = []
@@ -303,15 +346,14 @@ def main():
                     docs = []
                     response_seconds = 0.0
 
+                    # ===== 질문 및 답변 생성 =====
+
+                    start = perf_counter()
+
                     try:
 
-                        # 응답 시간 측정 시작
-                        start = perf_counter()
-
-                        # 질문 및 답변 생성
                         response, docs = answer(question)
 
-                        # 응답 시간 측정 종료
                         response_seconds = (
                             perf_counter() - start
                         )
@@ -334,49 +376,43 @@ def main():
                             f"질문 {number} 실패: {error}"
                         )
 
-                    # ===== 검색된 청크 정보 =====
+                    # ===== 검색된 청크 수 =====
 
                     retrieved_count = len(docs)
 
-                    # 검색된 PDF 페이지 번호
-                    retrieved_pages = sorted(
-                        {
-                            doc.metadata["page"] + 1
-                            for doc in docs
-                            if isinstance(
-                                doc.metadata.get("page"),
-                                int
-                            )
-                        }
+                    # ===== 답변 40자 줄바꿈 =====
+
+                    formatted_response = format_answer(
+                        response,
+                        width=40
                     )
 
-                    page_text = ", ".join(
-                        map(str, retrieved_pages)
-                    )
-
-                    # 검색된 문맥의 전체 문자 수
-                    context_length = sum(
-                        len(doc.page_content)
-                        for doc in docs
-                    )
-
-                    # ===== CSV 저장 =====
+                    # ===== CSV 질문별 결과 저장 =====
 
                     writer.writerow([
-                        run_id,
-                        size,
-                        overlap,
-                        len(chunks),
-                        round(index_seconds, 6),
-                        number,
-                        question,
-                        response,
-                        retrieved_count,
-                        page_text,
-                        context_length,
-                        round(response_seconds, 6),
-                        error,
+                        f"질문 {number}",
+                        question
                     ])
+
+                    writer.writerow([
+                        "답변",
+                        formatted_response
+                    ])
+
+                    writer.writerow([
+                        "검색된 청크 수",
+                        retrieved_count
+                    ])
+
+                    # 오류가 발생한 경우에만 기록
+                    if error:
+                        writer.writerow([
+                            "오류",
+                            error
+                        ])
+
+                    # 질문별 구분을 위한 빈 행
+                    writer.writerow([])
 
                     file.flush()
 
@@ -398,12 +434,17 @@ def main():
 
                     print("\n[실험 결과]")
                     print(f"전체 청크 수 : {len(chunks)}")
+
                     print(
                         f"평균 응답 시간 : "
                         f"{avg_response_time:.2f}초"
                     )
 
                 print("설정별 결과 저장 완료")
+
+                # 여러 설정을 실행할 경우 구분
+                writer.writerow([])
+                file.flush()
 
             finally:
 
