@@ -21,8 +21,8 @@ PDF_PATH = "data/manual.pdf"
 DOC_NAME = "LG 로보킹 청소로봇 (VR6180VMNC) 사용설명서"
 
 # [수정] 청크 튜닝 실험 결과에 맞게 변경
-CHUNK_SIZE = 100
-CHUNK_OVERLAP = 20
+CHUNK_SIZE = 1000
+CHUNK_OVERLAP = 40
 
 
 # ===== 1. PDF 처리 (Load → Split → Embed → Store) =====
