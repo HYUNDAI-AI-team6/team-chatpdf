@@ -12,7 +12,7 @@ venv/
 # 실행 데이터
 .gradio/
 chroma_db/
-experiments/
+chunk_experiment/
 
 # PDF
 *.pdf
