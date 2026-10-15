@@ -15,13 +15,23 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+import glob
 
 load_dotenv()
 logging.getLogger("pypdf").setLevel(logging.ERROR)  # PDF 경고 메시지 숨기기
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-PDF_PATH = "data/manual.pdf"
-DOC_NAME = "LG 로보킹 청소로봇 (VR6180VMNC) 사용설명서"
+
+#data 폴더의 pdf 형식의 파일들을 읽어옵니다.
+PDF_DIR = "data"
+PDF_PATHS = sorted(glob.glob(os.path.join(PDF_DIR, "*.pdf")))
+#PDF_PATH = "data/manual.pdf"
+DOC_NAME = ", ".join(os.path.splitext(os.path.basename(p))[0] for p in PDF_PATHS)
+
+#드랍다운 선택지
+DOCS = {os.path.basename(p): p for p in PDF_PATHS}   # {"manual.pdf": "data/manual.pdf", ...}
+#드랍다운 없이 쓸땐 그냥 요대로
+ALL_DOCS = "전체 (모든 PDF에서 검색)"
 
 # [수정] 청크 튜닝 실험 결과에 맞게 변경
 CHUNK_SIZE = 100
@@ -29,20 +39,16 @@ CHUNK_OVERLAP = 20
 
 
 # ===== 1. PDF 처리 (Load → Split → Embed → Store) =====
-def build_db(pdf_path, openai_key):
+def build_db(pdf_paths, openai_key):
     if not openai_key:
         return None, "⚠️ OpenAI API 키를 먼저 입력한 뒤 PDF를 다시 올려주세요."
-    if pdf_path is None:
-        return None, ""
-    if not os.path.exists(pdf_path):
-        print(f"⚠️ `{PDF_PATH}` 파일이 없습니다. 매뉴얼 PDF를 이 경로에 넣어주세요.")
+    if pdf_paths is None:
         return None, ""
 
-    try:
-        pages = PyPDFLoader(pdf_path).load_and_split()
-    except Exception as e:
-        print("매뉴얼 로드 실패:", e)
-        return None, "⚠️ 매뉴얼에서 글자를 읽지 못했습니다. PDF 경로를 확인하시고, PDF가 손상됐거나 스캔본인지 확인하세요."
+    #읽어온 pdf 파일들을 등록합니다.
+    pages = []
+    for path in pdf_paths:
+        pages += PyPDFLoader(path).load_and_split()
 
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
@@ -59,7 +65,8 @@ def build_db(pdf_path, openai_key):
     db = Chroma.from_documents(
         texts, embeddings_model, collection_name=f"pdf_{uuid.uuid4().hex}"
     )
-    return db, f"✅ 처리 완료: {len(pages)}페이지 → {len(texts)}개 청크"
+    return db, f"✅ 처리 완료: {len(pages)}페이지"
+    #return db, f"✅ 처리 완료: {len(pages)}페이지 → {len(texts)}개 청크"
 
 # ===== 2. 질문 처리 (Retrieve → Generate) =====
 def answer(question, openai_key, db):
@@ -68,52 +75,16 @@ def answer(question, openai_key, db):
     if not question:
         raise gr.Error("질문을 입력하세요.")
 
-    mmr_retriever = db.as_retriever(search_type="mmr", search_kwargs={"k": 3})
-
     llm = ChatOpenAI(temperature=0, openai_api_key=openai_key)
     retriever_from_llm = MultiQueryRetriever.from_llm(
-        retriever=mmr_retriever, llm=llm
+        retriever=db.as_retriever(), llm=llm
     )
     prompt = ChatPromptTemplate.from_template(
-         """
-당신은 가전제품 사용 설명서를 전문적으로 안내하는 AI 도우미입니다.
-
-[핵심 원칙]
-- 반드시 제공된 매뉴얼을 근거로 답변합니다.
-- 매뉴얼에 없는 정보는 추측하거나 만들어내지 않습니다.
-- 사용자의 질문과 관련된 내용만 답변합니다.
-- 답변은 친절하고 이해하기 쉬운 한국어 존댓말로 작성합니다.
-
-[답변 판단 기준]
-1. 매뉴얼에서 명확한 답을 찾은 경우:
-   - 해당 내용을 정확하게 설명합니다.
-
-2. 매뉴얼에 일부 정보만 존재하는 경우:
-   - 확인 가능한 부분만 답변합니다.
-   - 확인되지 않은 내용은 매뉴얼에서 확인할 수 없다고 안내합니다.
-
-3. 매뉴얼에서 관련 정보를 찾을 수 없는 경우:
-   - "해당 내용은 매뉴얼에서 확인할 수 없습니다."라고 답변합니다.
-
-[답변 형식]
-- 단순한 질문은 짧고 명확하게 답변합니다.
-- 사용 방법이나 조작 순서에 관한 질문은 번호를 붙여 설명합니다.
-- 주의사항이 필요한 경우 매뉴얼에 있는 안전 정보를 함께 안내합니다.
-- 불필요한 설명이나 반복적인 문장은 제외합니다.
-
-[금지사항]
-- 매뉴얼에 없는 기능을 있다고 설명하지 마세요.
-- 확인되지 않은 제품 사양을 임의로 작성하지 마세요.
-- 매뉴얼 내용을 넘어서는 해결 방법을 추측하지 마세요.
-
-[매뉴얼]
-{context}
-
-[사용자 질문]
-{question}
-
-[답변]
-"""   
+         "당신은 가전제품 사용 설명서 도우미야.\n"
+         "아래 [메뉴얼]을 보고 질문에 답변해줘.\n"
+         "[메뉴얼]에 없는 질문은 '메뉴얼에 없습니다'라고 답해.\n\n"
+         "[메뉴얼]\n{context}\n\n"
+         "[질문]\n{question}"     
     )
 
     generate_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, openai_api_key=openai_key)
@@ -135,27 +106,15 @@ def answer(question, openai_key, db):
 
         # print(text, end="", flush=True)
 
-# PDF_PATH = "./data/manual.pdf"
-# if not os.path.exists(PDF_PATH):
-#     print(f"⚠️ `{PDF_PATH}` 파일이 없습니다. 매뉴얼 PDF를 이 경로에 넣어주세요.")
-# else:
-#     db,_ = build_db(PDF_PATH, OPENAI_API_KEY)
-#     # build_db_text= build_db("./pdf/제품사용설명서.pdf", OPENAI_API_KEY)
-#     # print(build_db_text)
-#     prev = ""
-#     for text in answer("예약 청소는 최대 몇 시간 뒤까지 설정할 수 있나요?", OPENAI_API_KEY, db):
-#         print(text[len(prev):], end="", flush=True)   # 새로 추가된 부분만 출력
-#         prev = text
-#     print()
 
 # ===== 3. 앱 시작 시 매뉴얼 불러오기 =====
-def load_manual():
+def load_manual(paths=PDF_PATHS):
     if not OPENAI_API_KEY:
         return None, "⚠️ `.env`에 `OPENAI_API_KEY`가 없습니다."
-    if not os.path.exists(PDF_PATH):
-        return None, f"⚠️ `{PDF_PATH}` 파일이 없습니다. 매뉴얼 PDF를 이 경로에 넣어주세요."
+    if not paths:
+        return None, f"⚠️ `{PDF_DIR}` 폴더에 PDF 파일이 없습니다."
     try:
-        return build_db(PDF_PATH, OPENAI_API_KEY)
+        return build_db(paths, OPENAI_API_KEY)
     except Exception as e:
         print("매뉴얼 로드 실패:", e)
         return None, "⚠️ 매뉴얼에서 글자를 읽지 못했습니다. PDF가 손상됐거나 스캔본인지 확인하세요."
@@ -164,13 +123,22 @@ def load_manual():
 DB, LOAD_STATUS = load_manual()
 
 
+#새롭게 불러올 때
+def select_doc(doc_name):
+    global DB, LOAD_STATUS, DOC_NAME
+    paths = PDF_PATHS if doc_name == ALL_DOCS else [DOCS[doc_name]]
+    DB, LOAD_STATUS = load_manual(paths)
+    DOC_NAME = doc_name
+    return f"# 💬 가전제품 매뉴얼 상담봇\n📘 {DOC_NAME} · {LOAD_STATUS}", [], []
+
+
 def ask(question, history):
     if DB is None:
         raise gr.Error("매뉴얼을 불러오지 못했습니다. 화면 위쪽 안내를 확인하세요.")
     if not question or not question.strip():
         raise gr.Error("질문을 입력하세요.")
 
-    history = strip_options(history) + [
+    history = history + [
         {"role": "user", "content": question},
         {"role": "assistant", "content": "..."},
     ]
