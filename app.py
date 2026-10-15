@@ -59,7 +59,7 @@ def answer(question, openai_key, db):
     if not question:
         raise gr.Error("질문을 입력하세요.")
 
-    mmr_retriever = db.as_retriever(search_kwargs={"k": 3})
+    mmr_retriever = db.as_retriever(search_type="mmr", search_kwargs={"k": 3})
 
     llm = ChatOpenAI(temperature=0, openai_api_key=openai_key)
     retriever_from_llm = MultiQueryRetriever.from_llm(
@@ -78,10 +78,6 @@ def answer(question, openai_key, db):
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
 
-    # #비교를 위한 함수
-    # from retriever_compare import retriever_compare_
-    # retriever_compare_(question, openai_key, db)
-
     rag_chain = (
         {"context": retriever_from_llm | format_docs, "question": RunnablePassthrough()}
         | prompt
@@ -96,113 +92,113 @@ def answer(question, openai_key, db):
 
         # print(text, end="", flush=True)
 
-PDF_PATH = "./data/manual.pdf"
-if not os.path.exists(PDF_PATH):
-    print(f"⚠️ `{PDF_PATH}` 파일이 없습니다. 매뉴얼 PDF를 이 경로에 넣어주세요.")
-else:
-    db,_ = build_db(PDF_PATH, OPENAI_API_KEY)
-    # build_db_text= build_db("./pdf/제품사용설명서.pdf", OPENAI_API_KEY)
-    # print(build_db_text)
-    prev = ""
-    for text in answer("예약 청소는 최대 몇 시간 뒤까지 설정할 수 있나요?", OPENAI_API_KEY, db):
-        print(text[len(prev):], end="", flush=True)   # 새로 추가된 부분만 출력
-        prev = text
-    print()
+# PDF_PATH = "./data/manual.pdf"
+# if not os.path.exists(PDF_PATH):
+#     print(f"⚠️ `{PDF_PATH}` 파일이 없습니다. 매뉴얼 PDF를 이 경로에 넣어주세요.")
+# else:
+#     db,_ = build_db(PDF_PATH, OPENAI_API_KEY)
+#     # build_db_text= build_db("./pdf/제품사용설명서.pdf", OPENAI_API_KEY)
+#     # print(build_db_text)
+#     prev = ""
+#     for text in answer("예약 청소는 최대 몇 시간 뒤까지 설정할 수 있나요?", OPENAI_API_KEY, db):
+#         print(text[len(prev):], end="", flush=True)   # 새로 추가된 부분만 출력
+#         prev = text
+#     print()
 
-# # ===== 3. 앱 시작 시 매뉴얼 불러오기 =====
-# def load_manual():
-#     if not OPENAI_API_KEY:
-#         return None, "⚠️ `.env`에 `OPENAI_API_KEY`가 없습니다."
-#     if not os.path.exists(PDF_PATH):
-#         return None, f"⚠️ `{PDF_PATH}` 파일이 없습니다. 매뉴얼 PDF를 이 경로에 넣어주세요."
-#     try:
-#         return build_db(PDF_PATH, OPENAI_API_KEY)
-#     except Exception as e:
-#         print("매뉴얼 로드 실패:", e)
-#         return None, "⚠️ 매뉴얼에서 글자를 읽지 못했습니다. PDF가 손상됐거나 스캔본인지 확인하세요."
-
-
-# DB, LOAD_STATUS = load_manual()
+# ===== 3. 앱 시작 시 매뉴얼 불러오기 =====
+def load_manual():
+    if not OPENAI_API_KEY:
+        return None, "⚠️ `.env`에 `OPENAI_API_KEY`가 없습니다."
+    if not os.path.exists(PDF_PATH):
+        return None, f"⚠️ `{PDF_PATH}` 파일이 없습니다. 매뉴얼 PDF를 이 경로에 넣어주세요."
+    try:
+        return build_db(PDF_PATH, OPENAI_API_KEY)
+    except Exception as e:
+        print("매뉴얼 로드 실패:", e)
+        return None, "⚠️ 매뉴얼에서 글자를 읽지 못했습니다. PDF가 손상됐거나 스캔본인지 확인하세요."
 
 
-# def ask(question, history):
-#     if DB is None:
-#         raise gr.Error("매뉴얼을 불러오지 못했습니다. 화면 위쪽 안내를 확인하세요.")
-#     if not question or not question.strip():
-#         raise gr.Error("질문을 입력하세요.")
-
-#     history = history + [
-#         {"role": "user", "content": question},
-#         {"role": "assistant", "content": "..."},
-#     ]
-#     yield history, history, ""
-
-#     # [수정] answer()의 매개변수가 바뀌면 여기 호출도 같은 순서로 변경
-#     result = answer(question, OPENAI_API_KEY, DB)
-#     if isinstance(result, str):  # answer()가 문자열을 반환하는 경우
-#         result = [result]
-#     for text in result:          # 문자열 또는 yield 스트리밍 모두 처리
-#         history[-1] = {"role": "assistant", "content": text}
-#         yield history, history, ""
+DB, LOAD_STATUS = load_manual()
 
 
-# def clear_chat():
-#     return [], [], ""
+def ask(question, history):
+    if DB is None:
+        raise gr.Error("매뉴얼을 불러오지 못했습니다. 화면 위쪽 안내를 확인하세요.")
+    if not question or not question.strip():
+        raise gr.Error("질문을 입력하세요.")
+
+    history = history + [
+        {"role": "user", "content": question},
+        {"role": "assistant", "content": "..."},
+    ]
+    yield history, history, ""
+
+    # [수정] answer()의 매개변수가 바뀌면 여기 호출도 같은 순서로 변경
+    result = answer(question, OPENAI_API_KEY, DB)
+    if isinstance(result, str):  # answer()가 문자열을 반환하는 경우
+        result = [result]
+    for text in result:          # 문자열 또는 yield 스트리밍 모두 처리
+        history[-1] = {"role": "assistant", "content": text}
+        yield history, history, ""
 
 
-# # ===== 4. 화면 구성 =====
-# THEME = gr.themes.Soft(primary_hue="teal", secondary_hue="emerald", neutral_hue="slate").set(
-#     button_primary_background_fill="#3CC8A8",
-#     button_primary_background_fill_hover="#2FB394",
-#     button_primary_text_color="white",
-#     button_primary_border_color="#3CC8A8",
-# )
+def clear_chat():
+    return [], [], ""
 
-# CSS = """
-# .gradio-container { max-width: 820px !important; margin: 0 auto !important; }
-# #header { text-align: center; }
-# #chat { border: 1px solid #CDEFE6 !important; border-radius: 14px !important; }
-# #chat .message.user { background: #E6F8F3 !important; border-color: #9EE3D2 !important; }
-# #question textarea, #question input { border: 1px solid #9EE3D2 !important; border-radius: 10px !important; background: white !important; }
-# """
 
-# EXAMPLE_QUESTIONS = [
-#     "예약 청소는 최대 몇 시간 뒤까지 설정할 수 있나요?",
-#     "전원은 어떻게 끄나요?",
-#     "먼지통 청소 방법을 알려주세요.",
-#     "음성인식 기능은 어떻게 켜고 끄나요?",
-# ]
+# ===== 4. 화면 구성 =====
+THEME = gr.themes.Soft(primary_hue="teal", secondary_hue="emerald", neutral_hue="slate").set(
+    button_primary_background_fill="#3CC8A8",
+    button_primary_background_fill_hover="#2FB394",
+    button_primary_text_color="white",
+    button_primary_border_color="#3CC8A8",
+)
 
-# with gr.Blocks(title="가전제품 매뉴얼 도우미") as demo:
-#     gr.Markdown(
-#         f"# 💬 가전제품 매뉴얼 상담봇\n📘 {DOC_NAME} · {LOAD_STATUS}",
-#         elem_id="header",
-#     )
-#     history_state = gr.State([])
+CSS = """
+.gradio-container { max-width: 820px !important; margin: 0 auto !important; }
+#header { text-align: center; }
+#chat { border: 1px solid #CDEFE6 !important; border-radius: 14px !important; }
+#chat .message.user { background: #E6F8F3 !important; border-color: #9EE3D2 !important; }
+#question textarea, #question input { border: 1px solid #9EE3D2 !important; border-radius: 10px !important; background: white !important; }
+"""
 
-#     chatbot = gr.Chatbot(
-#         elem_id="chat",
-#         height=460,
-#         show_label=False,
-#         placeholder="**무엇이든 물어보세요!**<br>사용설명서를 대신 읽고 답해드려요.",
-#     )
-#     with gr.Row():
-#         question = gr.Textbox(
-#             elem_id="question",
-#             placeholder="궁금한 점을 입력하세요 (Enter로 전송)",
-#             show_label=False,
-#             container=False,
-#             scale=5,
-#         )
-#         send_btn = gr.Button("보내기", variant="primary", scale=1, min_width=90)
-#     gr.Examples(examples=EXAMPLE_QUESTIONS, inputs=question, label="자주 묻는 질문")
-#     clear_btn = gr.Button("🗑️ 대화 지우기", size="sm", variant="secondary")
+EXAMPLE_QUESTIONS = [
+    "예약 청소는 최대 몇 시간 뒤까지 설정할 수 있나요?",
+    "전원은 어떻게 끄나요?",
+    "먼지통 청소 방법을 알려주세요.",
+    "음성인식 기능은 어떻게 켜고 끄나요?",
+]
 
-#     # ===== 5. 이벤트 연결 =====
-#     send_btn.click(ask, inputs=[question, history_state], outputs=[chatbot, history_state, question])
-#     question.submit(ask, inputs=[question, history_state], outputs=[chatbot, history_state, question])
-#     clear_btn.click(clear_chat, outputs=[chatbot, history_state, question])
-#     chatbot.clear(clear_chat, outputs=[chatbot, history_state, question])  # 채팅창 휴지통 아이콘
+with gr.Blocks(title="가전제품 매뉴얼 도우미") as demo:
+    gr.Markdown(
+        f"# 💬 가전제품 매뉴얼 상담봇\n📘 {DOC_NAME} · {LOAD_STATUS}",
+        elem_id="header",
+    )
+    history_state = gr.State([])
 
-# if __name__ == "__main__":
-#     demo.launch(theme=THEME, css=CSS)
+    chatbot = gr.Chatbot(
+        elem_id="chat",
+        height=460,
+        show_label=False,
+        placeholder="**무엇이든 물어보세요!**<br>사용설명서를 대신 읽고 답해드려요.",
+    )
+    with gr.Row():
+        question = gr.Textbox(
+            elem_id="question",
+            placeholder="궁금한 점을 입력하세요 (Enter로 전송)",
+            show_label=False,
+            container=False,
+            scale=5,
+        )
+        send_btn = gr.Button("보내기", variant="primary", scale=1, min_width=90)
+    gr.Examples(examples=EXAMPLE_QUESTIONS, inputs=question, label="자주 묻는 질문")
+    clear_btn = gr.Button("🗑️ 대화 지우기", size="sm", variant="secondary")
+
+    # ===== 5. 이벤트 연결 =====
+    send_btn.click(ask, inputs=[question, history_state], outputs=[chatbot, history_state, question])
+    question.submit(ask, inputs=[question, history_state], outputs=[chatbot, history_state, question])
+    clear_btn.click(clear_chat, outputs=[chatbot, history_state, question])
+    chatbot.clear(clear_chat, outputs=[chatbot, history_state, question])  # 채팅창 휴지통 아이콘
+
+if __name__ == "__main__":
+    demo.launch(theme=THEME, css=CSS)
